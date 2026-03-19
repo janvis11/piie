@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 from typing import Any, Dict, List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -84,3 +82,5 @@ class RunArtifact(BaseModel):
     passed: bool
     results: List[CaseResult] = Field(default_factory=list)
     summary: Dict[str, Any] = Field(default_factory=dict)
+
+#git issue
