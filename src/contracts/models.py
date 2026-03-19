@@ -83,4 +83,3 @@ class RunArtifact(BaseModel):
     results: List[CaseResult] = Field(default_factory=list)
     summary: Dict[str, Any] = Field(default_factory=dict)
 
-#git issue
