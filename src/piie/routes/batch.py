@@ -5,13 +5,15 @@ Endpoints for processing multiple items at once.
 """
 
 import json
+import os
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import io
 
-from detectors import PIIDetector
-from sanitizers import PIISanitizer, SanitizationAction, PseudonymizationEngine
+from ..detectors import PIIDetector
+from ..sanitizers import PIISanitizer, SanitizationAction, PseudonymizationEngine
+from ..config import get_pseudonymization_config
 
 router = APIRouter(prefix="/batch", tags=["batch"])
 
@@ -59,7 +61,8 @@ async def batch_sanitize(request: BatchRequest):
         BatchResponse with results for each item
     """
     detector = PIIDetector()
-    sanitizer = PIISanitizer(PseudonymizationEngine())
+    pseudo_config = get_pseudonymization_config()
+    sanitizer = PIISanitizer(PseudonymizationEngine(salt=pseudo_config.salt))
 
     results = []
     errors = 0
@@ -79,9 +82,11 @@ async def batch_sanitize(request: BatchRequest):
             matches = detector.detect(content_str)
             sanitized = sanitizer.sanitize(content_str, matches, action)
 
+            # SECURITY: Don't expose original PII in response
+            # Return sanitized content and entity count only
             results.append(BatchResult(
                 id=item.id,
-                original=item.content,
+                original="[REDACTED]" if matches else item.content,
                 sanitized=sanitized.sanitized,
                 entities_found=len(matches),
                 risk_score=sanitizer.calculate_risk_score(matches)
@@ -90,7 +95,7 @@ async def batch_sanitize(request: BatchRequest):
             errors += 1
             results.append(BatchResult(
                 id=item.id,
-                original=item.content,
+                original="[REDACTED]",
                 sanitized=None,
                 entities_found=0,
                 risk_score=0,
@@ -121,7 +126,8 @@ async def batch_sanitize_file(
         Processed results
     """
     detector = PIIDetector()
-    sanitizer = PIISanitizer(PseudonymizationEngine())
+    pseudo_config = get_pseudonymization_config()
+    sanitizer = PIISanitizer(PseudonymizationEngine(salt=pseudo_config.salt))
 
     try:
         action = SanitizationAction(action or "redact")
@@ -148,9 +154,10 @@ async def batch_sanitize_file(
         matches = detector.detect(content_str)
         sanitized = sanitizer.sanitize(content_str, matches, action)
 
+        # SECURITY: Don't expose original PII in response
         results.append({
             "line": i + 1,
-            "original": data,
+            "original": "[REDACTED]" if matches else data,
             "sanitized": sanitized.sanitized,
             "entities_found": len(matches),
             "risk_score": sanitizer.calculate_risk_score(matches)
