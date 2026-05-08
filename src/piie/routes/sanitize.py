@@ -8,8 +8,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List, Union
 
-from detectors import PIIDetector
-from sanitizers import PIISanitizer, SanitizationAction, PseudonymizationEngine
+from ..detectors import PIIDetector
+from ..sanitizers import PIISanitizer, SanitizationAction, PseudonymizationEngine
+from ..config import get_pseudonymization_config
 
 router = APIRouter(prefix="/sanitize", tags=["sanitization"])
 
@@ -45,7 +46,8 @@ async def sanitize(request: SanitizeRequest):
         SanitizeResponse with original, sanitized content, and metadata
     """
     detector = PIIDetector()
-    sanitizer = PIISanitizer(PseudonymizationEngine())
+    pseudo_config = get_pseudonymization_config()
+    sanitizer = PIISanitizer(PseudonymizationEngine(salt=pseudo_config.salt))
 
     try:
         action = SanitizationAction(request.action or "redact")
@@ -77,17 +79,21 @@ async def sanitize(request: SanitizeRequest):
         if request.entity_types:
             all_matches = [m for m in all_matches if m.entity_type.value in request.entity_types]
 
-    # Build transformations list
+    # Build transformations list - SECURITY: never return original PII
     transformations = []
     for match in all_matches:
+        # Use hash for debugging without exposing PII
+        import hashlib
+        value_hash = hashlib.sha256(match.value.encode()).hexdigest()[:8]
         transformations.append({
             "entity_type": match.entity_type.value,
-            "original": match.value,
+            "value_hash": f"{match.entity_type.value}_{value_hash}",
+            "confidence": match.confidence,
             "position": f"{match.start_pos}-{match.end_pos}"
         })
 
     return SanitizeResponse(
-        original=request.content,
+        original="[REDACTED]" if all_matches else request.content,
         sanitized=sanitized_content,
         entities_found=len(all_matches),
         transformations=transformations,

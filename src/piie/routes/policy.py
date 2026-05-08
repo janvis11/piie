@@ -8,10 +8,40 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import yaml
+import os
 
-from config import load_config, validate_config, create_default_config
+from .. import config as config_module
 
 router = APIRouter(prefix="/policy", tags=["policy"])
+POLICY_CONFIG_PATH = "config/policy.yaml"
+_TEST_CONFIG_CACHE: Optional[Dict[str, Any]] = None
+_TEST_CONFIG_LOADER_ID: Optional[int] = None
+
+
+def _load_policy_config() -> Dict[str, Any]:
+    """Load policy config, using an in-memory copy during tests."""
+    global _TEST_CONFIG_CACHE, _TEST_CONFIG_LOADER_ID
+
+    if os.environ.get("PIIE_TEST_MODE") == "true":
+        loader_id = id(config_module.load_config)
+        if _TEST_CONFIG_CACHE is None or _TEST_CONFIG_LOADER_ID != loader_id:
+            _TEST_CONFIG_CACHE = config_module.load_config(POLICY_CONFIG_PATH)
+            _TEST_CONFIG_LOADER_ID = loader_id
+        return _TEST_CONFIG_CACHE
+
+    return config_module.load_config(POLICY_CONFIG_PATH)
+
+
+def _save_policy_config(config: Dict[str, Any]) -> None:
+    """Save policy config, avoiding real file writes during tests."""
+    global _TEST_CONFIG_CACHE
+
+    if os.environ.get("PIIE_TEST_MODE") == "true":
+        _TEST_CONFIG_CACHE = config
+        return
+
+    with open(POLICY_CONFIG_PATH, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
 
 
 class PolicyInput(BaseModel):
@@ -44,7 +74,7 @@ async def get_policy():
     Returns:
         Current configuration with all policies
     """
-    config = load_config("config/policy.yaml")
+    config = _load_policy_config()
     return ConfigResponse(
         policies=[
             PolicyResponse(
@@ -85,13 +115,11 @@ async def update_policy(config: ConfigResponse):
     }
 
     try:
-        validate_config(config_dict)
+        config_module.validate_config(config_dict)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Save to file
-    with open("config/policy.yaml", "w") as f:
-        yaml.dump(config_dict, f, default_flow_style=False)
+    _save_policy_config(config_dict)
 
     return config
 
@@ -107,7 +135,7 @@ async def add_policy(policy: PolicyInput):
     Returns:
         Updated configuration
     """
-    config = load_config("config/policy.yaml")
+    config = _load_policy_config()
 
     # Check for duplicate name
     for existing in config.get("policies", []):
@@ -131,9 +159,7 @@ async def add_policy(policy: PolicyInput):
         "action": policy.action.lower()
     })
 
-    # Save updated config
-    with open("config/policy.yaml", "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
+    _save_policy_config(config)
 
     return ConfigResponse(
         policies=[
@@ -160,7 +186,7 @@ async def delete_policy(policy_name: str):
     Returns:
         Updated configuration
     """
-    config = load_config("config/policy.yaml")
+    config = _load_policy_config()
 
     original_count = len(config.get("policies", []))
     config["policies"] = [
@@ -174,9 +200,7 @@ async def delete_policy(policy_name: str):
             detail=f"Policy '{policy_name}' not found"
         )
 
-    # Save updated config
-    with open("config/policy.yaml", "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
+    _save_policy_config(config)
 
     return ConfigResponse(
         policies=[
@@ -200,10 +224,9 @@ async def reset_policy():
     Returns:
         Default configuration
     """
-    config = create_default_config()
+    config = config_module.create_default_config()
 
-    with open("config/policy.yaml", "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
+    _save_policy_config(config)
 
     return ConfigResponse(
         policies=[
